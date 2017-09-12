@@ -3,12 +3,9 @@ import configparser
 import os
 import sys
 import datetime
-from os.path import isfile, join
-from os import urandom
-from hashlib import md5
+from os.path import join
 import re
 import shutil
-
 import socket
 from urllib.parse import urlparse
 
@@ -19,22 +16,29 @@ except ImportError:
 
 import pathlib
 
-from Crypto.Cipher import AES
+# from Crypto.Cipher import AES
+# from Cryptodome.Cipher import AES
+# from Cryptodome.Cipher import PKCS1_OAEP
+# from Cryptodome.PublicKey import RSA
+# from Cryptodome.Random import urandom
+# from hashlib import sha256
+# import uuid
+
+from Pycrypt.Crypto import RSAcrypt, AEScrypt
+import keyring
 
 import python_webdav.client
-
-
-# Temporary settings!!!
-ENCRYPTION_PASSWORD = '9907Black'
-REMOTE_USER = 'user1'
-REMOTE_USER_PASSWORD = '9907Black'
+from msvcrt import getch
+import getpass
 
 LOG_LEVELS = {1: 'INFO', 2: 'DEBUG', 3: 'ERROR'}
+BASE_DIR = os.path.dirname(sys.argv[0])
 CONFIG_FILE_NAME = '.cfg'
+TEMP_FILE_EXTENSION = '.tmp'
 ENCRYPT_FOLDER_NAME = 'encrypted'
 
 PATTERN_URL_VALIDATE = re.compile(
-        r'(?:^(?:http|ftp|webdav)+s?://)?'  # http:// or https://
+        r'(?:^(?:http|ftp|webdav|dav)+s?://)?'  # http:// or https://
         r'(?:(?:[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?\.)+(?:[A-Z]{2,6}\.?|[A-Z0-9-]{2,}\.?)|'  # domain...
         r'localhost|'  # localhost...
         r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}|'  # ...or ipv4
@@ -53,58 +57,9 @@ DELETE_ENCRYPTED = False
 ENCRYPT = True
 FORCE_ERRORS = False
 
-class Cryptomize(object):
+HEADER_SIZE = 128
+READ_CHUNK_SIZE = 16384
 
-    # taken from: https://stackoverflow.com/questions/16761458
-
-    @staticmethod
-    def derive_key_and_iv(password, salt, key_length, iv_length):
-        d = d_i = b''  # changed '' to b''
-        while len(d) < key_length + iv_length:
-            # changed password to str.encode(password)
-            d_i = md5(d_i + str.encode(password) + salt).digest()
-            d += d_i
-        return d[:key_length], d[key_length:key_length + iv_length]
-
-    @staticmethod
-    def encrypt(in_file, out_file, password, salt_header='', key_length=32):
-        # added salt_header=''
-        bs = AES.block_size
-        # replaced Crypt.Random with os.urandom
-        salt = urandom(bs - len(salt_header))
-        key, iv = Cryptomize.derive_key_and_iv(password, salt, key_length, bs)
-        cipher = AES.new(key, AES.MODE_CBC, iv)
-        # changed 'Salted__' to str.encode(salt_header)
-        out_file.write(str.encode(salt_header) + salt)
-        finished = False
-        while not finished:
-            chunk = in_file.read(1024 * bs)
-            if len(chunk) == 0 or len(chunk) % bs != 0:
-                padding_length = (bs - len(chunk) % bs) or bs
-                # changed right side to str.encode(...)
-                chunk += str.encode(
-                    padding_length * chr(padding_length))
-                finished = True
-            out_file.write(cipher.encrypt(chunk))
-
-    @staticmethod
-    def decrypt(in_file, out_file, password, salt_header='', key_length=32):
-        # added salt_header=''
-        bs = AES.block_size
-        # changed 'Salted__' to salt_header
-        salt = in_file.read(bs)[len(salt_header):]
-        key, iv = Cryptomize.derive_key_and_iv(password, salt, key_length, bs)
-        cipher = AES.new(key, AES.MODE_CBC, iv)
-        next_chunk = ''
-        finished = False
-        while not finished:
-            chunk, next_chunk = next_chunk, cipher.decrypt(
-                in_file.read(1024 * bs))
-            if len(next_chunk) == 0:
-                padding_length = chunk[-1]  # removed ord(...) as unnecessary
-                chunk = chunk[:-padding_length]
-                finished = True
-            out_file.write(bytes(x for x in chunk))  # changed chunk to bytes(...)
 
 def get_current_dt() -> datetime.datetime:
     """
@@ -157,7 +112,7 @@ def validate_url(url: str) -> bool:
     return False
 
 
-def scan_tree(path: str):
+def scan_tree(path: str, encrypted_dir=False):
     """
     Recursively yield DirEntry objects for given directory.
 
@@ -168,7 +123,10 @@ def scan_tree(path: str):
         return None
     for entry in scandir(path):
         if entry.is_dir(follow_symlinks=False):
-            if not entry.name.lower() == 'encrypted':
+            if not encrypted_dir:
+                if not entry.name.lower() == 'encrypted':
+                    yield from scan_tree(entry.path)
+            else:
                 yield from scan_tree(entry.path)
         else:
             yield entry
@@ -197,14 +155,53 @@ def response_parse(resp, content):
     if status == 204:
         return 2, 'file already exists.'
     else:
-        print(status)
         if isinstance(content, bytes):
-            response = content.decode()
-        return 3, 'error while uploading file: {0}'.format(response.replace('\n', ' '))
+            content = content.decode()
+        return 3, 'error while uploading file: {0}'.format(content.replace('\n', ' '))
+
+def hide_input(prompt='Password: ') -> str:
+    """
+    Prompt for a password and masks the input.
+    Returns:
+        the value entered by the user.
+    """
+
+    if sys.stdin is not sys.__stdin__:
+        pwd = getpass.getpass(prompt)
+        return pwd
+    else:
+        pwd = ""
+        sys.stdout.write(prompt)
+        sys.stdout.flush()
+        while True:
+            key = ord(getch())
+            if key == 13:  # Return Key
+                sys.stdout.write('\n')
+                return pwd
+            if key == 8:  # Backspace key
+                if len(pwd) > 0:
+                    # Erases previous character.
+                    sys.stdout.write('\b' + ' ' + '\b')
+                    sys.stdout.flush()
+                    pwd = pwd[:-1]
+            else:
+                # Masks user input.
+                char = chr(key)
+                sys.stdout.write('*')
+                sys.stdout.flush()
+                pwd = pwd + char
 
 if __name__ == '__main__':
-    log = init_log('log.log')
+    log = init_log(join(BASE_DIR, 'log.log'))
     log(1, 'Agent started.')
+
+    login_user = 'Unknown'
+    try:
+        login_user = os.getlogin()
+    except Exception:
+        pass
+
+    log(1, 'Agent started by {0}'.format(login_user))
 
     arg_parser = argparse.ArgumentParser()
 
@@ -229,6 +226,7 @@ if __name__ == '__main__':
 
     args = arg_parser.parse_args()
 
+
     if args.config:
         # load preferences from folder/file
         option_config = args.config[0]
@@ -236,7 +234,8 @@ if __name__ == '__main__':
 
         # search config in program root directory
         if cfg_path == '.':
-            prg_path = join(os.path.abspath(__file__), CONFIG_FILE_NAME)
+            prg_path = join(BASE_DIR, CONFIG_FILE_NAME)
+            print(prg_path)
             prg_path = pathlib.Path(prg_path)
             cfg_path = join(*prg_path.parts[:-2], CONFIG_FILE_NAME)
             if os.path.exists(cfg_path):
@@ -345,6 +344,38 @@ if __name__ == '__main__':
     print('Delete encrypted file(s):', DELETE_ENCRYPTED)
     print('Force errors:', FORCE_ERRORS)
 
+    #######################
+    # LOADING CREDENTIALS #
+    #######################
+    master_key_path = join(BASE_DIR, 'master.key')
+    public_key_path = join(BASE_DIR, 'pubkey.der')
+
+    if not os.path.exists(master_key_path):
+        print('Unable to locate master key file.')
+        log(3, 'Unable to locate master key file.')
+    elif not os.path.exists(public_key_path):
+        print('Unable to locate public key file.')
+        log(3, 'Unable to locate public key file.')
+
+    with open(master_key_path, 'rb') as ms_key:
+        master_psw = ms_key.read().decode()
+
+    ENCRYPTION_PASSWORD = keyring.get_password('_agent_e_psw', master_psw)
+    REMOTE_USER = keyring.get_password('_agent_r_usr', master_psw)
+    REMOTE_USER_PASSWORD = keyring.get_password('_agent_r_psw', master_psw)
+
+    crypto = RSAcrypt()
+
+    if not ENCRYPTION_PASSWORD and ENCRYPT:
+        log(2, 'Encryption password not set but ENCRYPT = true. Aborting.')
+        print('Encryption password not set. At first start use -i [upload] key to set passwords for encryption')
+        sys.exit(-1)
+
+    if not (REMOTE_USER and REMOTE_USER_PASSWORD) and UPLOAD:
+        log(2, 'Remote user|password not set but UPLOAD = true. Aborting.')
+        print('Remote user/password not set. At first start use -i [upload] key to set passwords for encryption')
+        sys.exit(-1)
+
     # checks
     if FORCE_ERRORS:
         log(2, 'Force errors key used. Risk of uncertain behavior!')
@@ -386,6 +417,7 @@ if __name__ == '__main__':
         files = files[:1]
 
     # Encryption stage
+    encryption_dir = ''
     if ENCRYPT:
         encryption_dir = join(FILES_LOCATION, ENCRYPT_FOLDER_NAME)
         # Create folder for encrypted files in the root of FILES_LOCATION if not exists
@@ -414,14 +446,48 @@ if __name__ == '__main__':
 
             full_file_path = join(encrypted_path, new_filename)
 
-            # !!! exception here !!!
-            in_file_object = open(file.path, mode='rb')
-            out_file_object = open(full_file_path, mode='wb')
+            # File encryption
+            try:
+                # Encrypt whole file with AES
+                with open(file.path, mode='rb') as in_file_object, open(full_file_path, mode='wb') as out_file_object:
+                    AEScrypt.encrypt(in_file_object, out_file_object, ENCRYPTION_PASSWORD, key_length=32)
 
-            Cryptomize.encrypt(in_file_object, out_file_object, ENCRYPTION_PASSWORD, key_length=32)
+                log(1, 'File {0} encrypted with AES'.format(file.path))
 
-            in_file_object.close()
-            out_file_object.close()
+                # Encrypts *HEADER_SIZE bytes of file with RSA public key
+                with open(full_file_path, 'rb') as encrypted_file:
+                    block = encrypted_file.read(HEADER_SIZE)
+
+                    with open(public_key_path, 'rb') as public_key:
+                        chipertext = crypto.encrypt_psw(block, public_key)
+
+                    # Write HEADER + RSA_ENCRYPTED_BLOCK + AES_ENCRYPTED_PART to file
+                    size = len(chipertext)
+                    bias = str(size).ljust(HEADER_SIZE, '0').encode()
+
+                    encrypted_file.seek(0)
+
+                    with open(full_file_path + TEMP_FILE_EXTENSION, 'ab') as temp_file:
+                        temp_file.write(bias + chipertext)
+
+                        encrypted_file.seek(HEADER_SIZE)
+
+                        while True:
+                            chunk = encrypted_file.read(READ_CHUNK_SIZE)
+                            if not chunk:
+                                break
+                            temp_file.write(chunk)
+
+                        log(1, 'RSA signature added to temp file.'.format(file.path))
+
+                os.remove(full_file_path)
+                os.rename(full_file_path + TEMP_FILE_EXTENSION, full_file_path)
+
+                log(1, 'File {0} finally encrypted'.format(file.path))
+
+            except Exception as err:
+                log(3, 'Error occurred during encryption process. Error: {0}'.format(err))
+                print('Error occurred during encryption process')
 
     # Upload stage
     if UPLOAD:
@@ -439,6 +505,9 @@ if __name__ == '__main__':
             # look for encrypted files in 'encrypt' folder
             encrypted_files = sorted([file for file in scan_tree(encrypted_path)], key=lambda file: file.stat().st_ctime,
                            reverse=True)
+            if ONLY_LAST:
+                encrypted_files = encrypted_files[:1]
+
             for file in encrypted_files:
                 if SAVE_STRUCTURE:
                     log(1, 'save_structure set to True. Building directory structure.'.format(UPLOAD_URI))
@@ -519,10 +588,15 @@ if __name__ == '__main__':
         if not DELETE_ORIGIN:
             if (DELETE_ENCRYPTED and ENCRYPT) or FORCE_ERRORS:
                 for obj in encrypted_files:
-                    if obj.is_dir:
-                        file_path = pathlib.Path(obj.path)
-                        file_path_parts = file_path.parts
-                        folders_path = join('', *file_path_parts[:-1])
-                        shutil.rmtree(folders_path)
-                    elif obj.is_file:
-                        os.remove(obj.path)
+                    if os.path.exists(obj.path):
+                        if obj.is_dir:
+                            file_path = pathlib.Path(obj.path)
+                            file_path_parts = file_path.parts
+                            folders_path = join('', *file_path_parts[:-1])
+                            shutil.rmtree(folders_path)
+                        elif obj.is_file:
+                            try:
+                                os.remove(obj.path)
+                            except Exception as err:
+                                log(3, 'File {0} deletion error. Passing through... Error: '.format(obj.path, err))
+    sys.exit(0)

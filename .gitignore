@@ -33,6 +33,11 @@ var/
 #  before PyInstaller builds the exe, so as to inject date/other infos into it.
 *.manifest
 *.spec
+pyinstaller
+install/
+relise/
+safe_favicon.ico
+agent_favicon.ico
 
 # Installer logs
 pip-log.txt
@@ -48,6 +53,11 @@ nosetests.xml
 coverage.xml
 *,cover
 .hypothesis/
+
+# Keys/certs
+*.key
+*.pem
+*.der
 
 # Translations
 *.mo
@@ -90,6 +100,10 @@ ENV/
 dev/
 files/
 test_set/
+
+#temp
+testo.py
+pwd.txt
 
 # Spyder project settings
 .spyderproject
