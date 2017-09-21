@@ -523,7 +523,6 @@ if __name__ == '__main__':
                         conn.mkdir(prev_part)
                     log(1, 'Directories structure build on server: {0}'.format(prev_part))
                     # build upload path and do upload
-                    x = 10
                     upload_path = '{0}{1}/{2}'.format('/' if not prev_part.startswith('/') else '', prev_part, file.name)
                     resp, content = conn.upload_file(file.path, path=upload_path)
                     code, operation_info = response_parse(resp, content)
