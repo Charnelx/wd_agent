@@ -106,6 +106,8 @@ class Agent(AgentBase):
         elif not os.path.exists(public_key_path):
             logger.warning('unable to locate public key file.')
 
+        # TODO: open and decode files containing encryption password and remote credentials
+
     def stage_encrypt(self, *args):
         pass
 
