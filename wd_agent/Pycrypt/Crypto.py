@@ -5,10 +5,13 @@ from Cryptodome.Random import urandom
 from hashlib import sha256
 import keyring
 import uuid
+from io import StringIO
 
 TEMP_FILE_EXTENSION = '.tmp'
 HEADER_SIZE = 128
-
+PRIVATE_KEY_NAME = 'privkey.pem'
+PUBLIC_KEY_NAME = 'pubkey.der'
+MASTER_KEY_NAME = 'master.key'
 
 class RSAcrypt(object):
 
@@ -21,7 +24,7 @@ class RSAcrypt(object):
         return private_key, public_key
 
     def export_keys(self, privat_key, public_key):
-        with open('privkey.pem', 'wb') as priv_key, open('pubkey.der', 'wb') as pub_key, open('master.key', 'wb') as m_k:
+        with open(PRIVATE_KEY_NAME, 'wb') as priv_key, open(PUBLIC_KEY_NAME, 'wb') as pub_key, open(MASTER_KEY_NAME, 'wb') as m_k:
             priv_key.write(privat_key.exportKey(format='PEM', passphrase=self.passphrase))
             pub_key.write(public_key.exportKey(format='DER'))
             m_k.write(uuid.uuid4().hex.encode())
@@ -99,3 +102,24 @@ class AEScrypt(object):
                 chunk = chunk[:-padding_length]
                 finished = True
             out_file.write(bytes(x for x in chunk))
+
+
+    @staticmethod
+    def decrypt_to_mem(in_file, password, salt_header='', key_length=32):
+        file = StringIO('')
+        bs = AES.block_size
+        salt = in_file.read(bs)[len(salt_header):]
+        key, iv = AEScrypt.derive_key_and_iv(password, salt, key_length, bs)
+        cipher = AES.new(key, AES.MODE_CBC, iv)
+        next_chunk = ''
+        finished = False
+        while not finished:
+            chunk, next_chunk = next_chunk, cipher.decrypt(
+                in_file.read(1024 * bs))
+            if len(next_chunk) == 0:
+                padding_length = chunk[-1]
+                chunk = chunk[:-padding_length]
+                finished = True
+            block = bytes(x for x in chunk)
+            file.write(block.decode())
+        return file.getvalue()

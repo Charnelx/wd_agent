@@ -33,8 +33,11 @@ from Pycrypt.Crypto import RSAcrypt, AEScrypt
 # Basic constants
 BASE_DIR = os.path.dirname(sys.argv[0])
 CONFIG_FILE_NAME = '.cfg'
-TEMP_FILE_EXTENSION = '.tmp'
+CREDENTIALS_FILE_NAME = 'credentials.file'
 ENCRYPT_FOLDER_NAME = 'encrypted'
+MASTER_KEY_NAME = 'masterkey.key'
+PUBLIC_KEY_NAME = 'pubkey.der'
+TEMP_FILE_EXTENSION = '.tmp'
 
 # Encryption constants
 HEADER_SIZE = 128
@@ -98,8 +101,8 @@ class Agent(AgentBase):
 
     def stage_credentials(self, *args):
         logger.info('credentials stage started')
-        master_key_path = join(BASE_DIR, 'master.key')
-        public_key_path = join(BASE_DIR, 'pubkey.der')
+        master_key_path = join(BASE_DIR, MASTER_KEY_NAME)
+        public_key_path = join(BASE_DIR, PUBLIC_KEY_NAME)
 
         if not os.path.exists(master_key_path):
             logger.warning('unable to locate master key file')
