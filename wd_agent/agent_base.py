@@ -21,3 +21,15 @@ class AgentBase(ABC):
     @abstractmethod
     def stage_delete(self):
         pass
+
+
+class NoKeyFileException(Exception):
+    pass
+
+
+class NoFilesToProcess(Exception):
+    pass
+
+
+class EncryptionError(Exception):
+    pass
